@@ -102,6 +102,12 @@ pub(crate) type DebugCallback = XRc<dyn Fn(&Lua, &Debug) -> Result<VmState> + Se
 #[cfg(all(not(feature = "send"), feature = "luau"))]
 pub(crate) type DebugCallback = XRc<dyn Fn(&Lua, &Debug) -> Result<VmState>>;
 
+#[cfg(all(feature = "send", feature = "luau-debugger"))]
+pub(crate) type ProtectedErrorCallback = XRc<dyn Fn(&Lua, crate::Value, usize) -> bool + Send>;
+
+#[cfg(all(not(feature = "send"), feature = "luau-debugger"))]
+pub(crate) type ProtectedErrorCallback = XRc<dyn Fn(&Lua, crate::Value, usize) -> bool>;
+
 #[cfg(feature = "send")]
 pub(crate) type ThreadEventCallback = XRc<dyn Fn(&Lua, crate::thread::ThreadEvent) -> Result<()> + Send>;
 

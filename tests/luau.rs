@@ -830,3 +830,57 @@ fn test_integer64_type() -> Result<()> {
 
 #[path = "luau/require.rs"]
 mod require;
+
+#[cfg(feature = "luau-debugger")]
+#[test]
+fn protected_error_break_preserves_the_live_stack_and_error_object() -> Result<()> {
+    let lua = Lua::new();
+    let calls = Arc::new(AtomicU64::new(0));
+    let hits = Arc::clone(&calls);
+    lua.set_debug_protected_error(move |lua, error, handler| {
+        assert!(error.is_table());
+        assert!(handler > 0);
+        assert!(lua.inspect_stack(0, |frame| frame.stack_depth()).is_some());
+        hits.fetch_add(1, Ordering::Relaxed);
+        true
+    });
+    let thread = lua.create_thread(
+        lua.load(
+            r#"
+        local token = {}
+        local ok, returned = xpcall(function()
+            error(token)
+        end, function(err)
+            handled = true
+            return err
+        end)
+        return not ok and returned == token
+        "#,
+        )
+        .into_function()?,
+    )?;
+    thread.resume::<()>(())?;
+    assert!(thread.is_debug_break());
+    assert!(!lua.globals().get::<Option<bool>>("handled")?.unwrap_or(false));
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(thread.resume::<bool>(())?);
+    assert!(lua.globals().get::<bool>("handled")?);
+    lua.remove_debug_protected_error();
+    Ok(())
+}
+
+#[cfg(feature = "luau-debugger")]
+#[test]
+fn protected_error_callback_returns_a_rust_panic_at_resume() -> Result<()> {
+    let lua = Lua::new();
+    lua.set_debug_protected_error(|_, _, _| panic!("debugger panic"));
+    let thread = lua.create_thread(
+        lua.load("return pcall(function() error('caught') end)")
+            .into_function()?,
+    )?;
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| thread.resume::<()>(())))
+        .expect_err("the debugger panic must return through Rust");
+    assert_eq!(panic.downcast_ref::<&str>(), Some(&"debugger panic"));
+    assert_eq!(lua.load("return 2 + 3").eval::<i32>()?, 5);
+    Ok(())
+}

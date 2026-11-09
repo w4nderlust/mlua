@@ -94,6 +94,10 @@ pub(crate) struct ExtraData {
     pub(super) debug_break_callback: Option<crate::types::DebugCallback>,
     #[cfg(feature = "luau")]
     pub(super) debug_step_callback: Option<crate::types::DebugCallback>,
+    #[cfg(feature = "luau-debugger")]
+    pub(super) protected_error_callback: Option<crate::types::ProtectedErrorCallback>,
+    #[cfg(feature = "luau-debugger")]
+    pub(super) protected_error_panic: Option<Box<dyn std::any::Any + Send>>,
     pub(super) thread_triggers: ThreadTriggers,
     pub(super) thread_event_callback: Option<ThreadEventCallback>,
     pub(super) thread_event_state: *mut ffi::lua_State,
@@ -214,6 +218,10 @@ impl ExtraData {
             debug_break_callback: None,
             #[cfg(feature = "luau")]
             debug_step_callback: None,
+            #[cfg(feature = "luau-debugger")]
+            protected_error_callback: None,
+            #[cfg(feature = "luau-debugger")]
+            protected_error_panic: None,
             thread_triggers: ThreadTriggers::default(),
             thread_event_callback: None,
             thread_event_state: ptr::null_mut(),

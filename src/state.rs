@@ -55,6 +55,9 @@ pub(crate) use util::callback_error_ext;
 #[cfg(feature = "luau")]
 pub(crate) use util::debug_callback;
 
+#[cfg(feature = "luau-debugger")]
+pub(crate) use util::StateGuard;
+
 /// Top level Lua struct which represents an instance of Lua VM.
 pub struct Lua {
     pub(self) raw: XRc<ReentrantMutex<RawLua>>,
@@ -940,6 +943,44 @@ impl Lua {
         unsafe {
             (*lua.extra.get()).debug_step_callback = Some(XRc::new(callback));
             (*ffi::lua_callbacks(lua.main_state())).debugstep = Some(debug_step_proc);
+        }
+    }
+
+    /// Returns whether the currently executing Luau thread can yield.
+    #[cfg(feature = "luau-debugger")]
+    pub fn is_yieldable(&self) -> bool {
+        let lua = self.lock();
+        unsafe { ffi::lua_isyieldable(lua.state()) != 0 }
+    }
+
+    /// Sets the debugger callback for a runtime error about to enter a protected handler.
+    ///
+    /// Returning `true` suspends the coroutine with its original error on the stack.
+    /// Resuming delivers that error to the original handler. The callback may inspect
+    /// the throwing frames while they are still live. The final argument is the
+    /// stack level of the protected call.
+    ///
+    /// Requires a Luau build with the debugger extensions.
+    #[cfg(feature = "luau-debugger")]
+    pub fn set_debug_protected_error<F>(&self, callback: F)
+    where
+        F: Fn(&Lua, Value, usize) -> bool + MaybeSend + 'static,
+    {
+        let lua = self.lock();
+        unsafe {
+            (*lua.extra.get()).protected_error_callback = Some(XRc::new(callback));
+            (*ffi::lua_callbacks(lua.main_state())).debugprotectederror =
+                Some(util::protected_error_callback);
+        }
+    }
+
+    /// Clears the protected-error debugger callback.
+    #[cfg(feature = "luau-debugger")]
+    pub fn remove_debug_protected_error(&self) {
+        let lua = self.lock();
+        unsafe {
+            (*lua.extra.get()).protected_error_callback = None;
+            (*ffi::lua_callbacks(lua.main_state())).debugprotectederror = None;
         }
     }
 

@@ -553,6 +553,12 @@ unsafe extern "C-unwind" {
     pub fn lua_incustomexecution(L: *mut lua_State, level: c_int) -> c_int;
 
     pub fn lua_singlestep(L: *mut lua_State, enabled: c_int);
+    #[cfg(feature = "luau-debugger")]
+    pub fn lua_debugprotectederrorstatus(L: *mut lua_State) -> c_int;
+    #[cfg(feature = "luau-debugger")]
+    pub fn lua_debugprotectedhandler(L: *mut lua_State) -> c_int;
+    #[cfg(feature = "luau-debugger")]
+    pub fn lua_debugjumptoline(L: *mut lua_State, line: c_int) -> c_int;
     pub fn lua_breakpoint(L: *mut lua_State, funcindex: c_int, line: c_int, enabled: c_int) -> c_int;
     pub fn lua_atbreakpoint(L: *mut lua_State) -> c_int;
 

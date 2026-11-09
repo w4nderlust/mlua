@@ -561,6 +561,11 @@ impl RawLua {
         }
     }
 
+    #[cfg(feature = "luau-debugger")]
+    pub(crate) unsafe fn take_protected_error_panic(&self) -> Option<Box<dyn std::any::Any + Send>> {
+        (*self.extra.get()).protected_error_panic.take()
+    }
+
     /// See [`Lua::create_string`]
     pub(crate) unsafe fn create_string(&self, s: &[u8]) -> Result<LuaString> {
         let state = self.state();

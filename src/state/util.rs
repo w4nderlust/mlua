@@ -11,10 +11,10 @@ use crate::state::{ExtraData, RawLua};
 use crate::types::{DebugCallback, VmState, XRc};
 use crate::util::{self, WrappedFailure, get_internal_metatable};
 
-struct StateGuard<'a>(&'a RawLua, *mut ffi::lua_State);
+pub(crate) struct StateGuard<'a>(&'a RawLua, *mut ffi::lua_State);
 
 impl<'a> StateGuard<'a> {
-    fn new(inner: &'a RawLua, mut state: *mut ffi::lua_State) -> Self {
+    pub(crate) fn new(inner: &'a RawLua, mut state: *mut ffi::lua_State) -> Self {
         state = inner.state.replace(state);
         Self(inner, state)
     }
@@ -85,6 +85,46 @@ pub(crate) unsafe fn debug_callback(
             raise(WrappedFailure::Error(Error::CallbackError { traceback, cause }));
         }
         Err(panic) => raise(WrappedFailure::Panic(Some(panic))),
+    }
+}
+
+/// Notify the debugger only while the original runtime error and throwing stack are intact.
+#[cfg(feature = "luau-debugger")]
+pub(crate) unsafe extern "C-unwind" fn protected_error_callback(state: *mut ffi::lua_State) {
+    if ffi::lua_debugprotectederrorstatus(state) != ffi::LUA_ERRRUN || ffi::lua_gettop(state) < 1 {
+        return;
+    }
+    let Ok(handler) = usize::try_from(ffi::lua_debugprotectedhandler(state)) else {
+        return;
+    };
+    let extra = ExtraData::get(state);
+    let Some(callback) = (*extra).protected_error_callback.clone() else {
+        return;
+    };
+    if XRc::strong_count(&callback) > 2 {
+        return;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let raw = (*extra).raw_lua();
+        let _guard = StateGuard::new(raw, state);
+        if ffi::lua_checkstack(state, 1) == 0 {
+            return false;
+        }
+        raw.try_stack_value(-1, None)
+            .is_ok_and(|error| callback(raw.lua(), error, handler))
+    }));
+    match result {
+        Ok(true) => {
+            ffi::lua_break(state);
+        }
+        Ok(false) => {}
+        Err(panic) => {
+            // resume_finish invokes this hook outside a protected Lua call.
+            // Bring the panic back to Rust without unwinding through the VM.
+            if (*extra).protected_error_panic.is_none() {
+                (*extra).protected_error_panic = Some(panic);
+            }
+        }
     }
 }
 

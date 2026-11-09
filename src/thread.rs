@@ -354,6 +354,11 @@ impl Thread {
                 thread_sg.keep(ffi::lua_gettop(thread_state));
             }
 
+            #[cfg(feature = "luau-debugger")]
+            if let Some(panic) = lua.take_protected_error_panic() {
+                std::panic::resume_unwind(panic);
+            }
+
             check_stack(state, nresults + 1)?;
             ffi::lua_xmove(thread_state, state, nresults);
 
@@ -425,6 +430,8 @@ impl Thread {
         match ret {
             ffi::LUA_OK => Ok((ThreadStatusInner::Finished, nresults)),
             ffi::LUA_YIELD => Ok((ThreadStatusInner::Yielded(0), nresults)),
+            #[cfg(feature = "luau-debugger")]
+            ffi::LUA_BREAK => Ok((ThreadStatusInner::Yielded(0), 0)),
             ffi::LUA_ERRMEM => {
                 // Don't call error handler for memory errors
                 Err(pop_error(thread_state, ret))
@@ -459,6 +466,8 @@ impl Thread {
         let top = unsafe { ffi::lua_gettop(thread_state) };
         match status {
             ffi::LUA_YIELD => ThreadStatusInner::Yielded(top),
+            #[cfg(feature = "luau-debugger")]
+            ffi::LUA_BREAK => ThreadStatusInner::Yielded(0),
             ffi::LUA_OK => {
                 // Active call frames mean this thread has resumed another (still-running) thread.
                 // Without frames it's new or finished.
@@ -492,8 +501,61 @@ impl Thread {
         }
     }
 
+    /// Moves a suspended Luau frame to an eligible statement in the same function.
+    ///
+    /// Returns `false` when the line is outside the current function, is not a
+    /// statement boundary, or has different active local variables.
+    #[cfg(feature = "luau-debugger")]
+    pub fn set_next_statement(&self, line: u32) -> bool {
+        let Ok(line) = c_int::try_from(line) else {
+            return false;
+        };
+        let _lua = self.0.lua.lock();
+        unsafe { ffi::lua_debugjumptoline(self.state(), line) != 0 }
+    }
+
+    /// Returns whether Luau has suspended this thread with a native debug break.
+    #[cfg(feature = "luau-debugger")]
+    pub fn is_debug_break(&self) -> bool {
+        let _lua = self.0.lua.lock();
+        unsafe { ffi::lua_status(self.state()) == ffi::LUA_BREAK }
+    }
+
+    /// Continues a debug-broken child so Luau's suspended coroutine resumer can collect its results.
+    ///
+    /// Call for child threads from deepest to shallowest, then resume the top-level
+    /// thread normally. Result values and script errors stay on the child's stack.
+    #[cfg(feature = "luau-debugger")]
+    pub fn continue_for_luau_resumer(&self) -> Result<()> {
+        let lua = self.0.lua.lock();
+        let thread = self.state();
+        check_thread_reentrancy(thread, &lua)?;
+        if unsafe { ffi::lua_status(thread) } != ffi::LUA_BREAK {
+            return Err(Error::CoroutineUnresumable);
+        }
+        unsafe {
+            ffi::lua_resumex(thread, lua.state(), 0, std::ptr::null_mut());
+            if let Some(panic) = lua.take_protected_error_panic() {
+                std::panic::resume_unwind(panic);
+            }
+        }
+        Ok(())
+    }
+
+    /// Inspects a frame on a suspended Luau thread.
+    #[cfg(feature = "luau-debugger")]
+    pub fn inspect_stack<R>(&self, level: usize, f: impl FnOnce(&crate::debug::Debug) -> R) -> Option<R> {
+        let lua = self.0.lua.lock();
+        let _guard = crate::state::StateGuard::new(&lua, self.state());
+        lua.lua().inspect_stack(level, f)
+    }
+
     /// Distinguishes a hook interruption from a normal yield.
     fn is_hook_yielded(&self, lua: &RawLua) -> bool {
+        #[cfg(feature = "luau-debugger")]
+        if unsafe { ffi::lua_status(self.state()) } == ffi::LUA_BREAK {
+            return true;
+        }
         unsafe { lua.is_hook_yielded(self.state()) }
     }
 
